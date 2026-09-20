@@ -99,6 +99,28 @@ main{flex:1;display:flex;flex-direction:column;min-width:0;height:100vh;
 .stage{flex:1;display:flex;align-items:center;justify-content:center;padding:16px;min-height:0;position:relative}
 canvas{max-width:100%;max-height:100%;background:#000;border-radius:8px;
   box-shadow:0 24px 70px rgba(0,0,0,.7);cursor:default;touch-action:none}
+/* Fullscreen mode — canvas fills screen, keeps aspect, controls hidden */
+body.fs-mode .transport,
+body.fs-mode aside,
+body.fs-mode .brand{display:none !important}
+body.fs-mode main{background:#000}
+body.fs-mode .stage{padding:0}
+body.fs-mode canvas{max-width:100vw;max-height:100vh;border-radius:0;box-shadow:none}
+#fsExit{position:fixed;top:14px;right:14px;z-index:9999;display:none;
+  background:rgba(0,0,0,.6);color:#fff;border:1px solid rgba(255,255,255,.2);
+  border-radius:6px;padding:8px 12px;font-size:12px;cursor:pointer}
+body.fs-mode #fsExit{display:block}
+body.fs-mode .transport{position:fixed;bottom:0;left:0;right:0;
+  background:rgba(0,0,0,.55);backdrop-filter:blur(8px);z-index:9998;
+  opacity:0;transition:opacity .25s;border-top:none}
+body.fs-mode:hover .transport{opacity:1}
+body.fs-mode .transport button,
+body.fs-mode .transport span,
+body.fs-mode .transport input{color:#fff}
+/* Shorts export chips */
+.shortsGrid{display:grid;grid-template-columns:1fr 1fr;gap:6px;margin-top:6px}
+.shortsGrid button{font-size:11px;padding:8px 6px;line-height:1.3}
+.shortsGrid small{display:block;color:#7f8ba5;font-weight:500;font-size:10px;margin-top:2px}
 .transport{flex:0 0 auto;display:flex;align-items:center;gap:10px;padding:10px 16px;
   background:var(--panel);border-top:1px solid var(--line)}
 .transport input[type=range]{flex:1}
@@ -228,13 +250,22 @@ a.dl{display:none;margin-top:8px;color:var(--acc2);font-size:12px;text-decoratio
 
     <!-- ============ LAYOUT ============ -->
     <div class="panel" data-panel="layout">
-      <h3>Canvas preset</h3>
+            <h3>Canvas preset</h3>
       <div class="grid2">
         <button class="preset" data-res="1280x720">1280 × 720 (HD)</button>
         <button class="preset" data-res="1920x1080">1920 × 1080 (FHD)</button>
         <button class="preset" data-res="1080x1080">1080 × 1080 (Sq)</button>
         <button class="preset" data-res="1080x1920">1080 × 1920 (Vert)</button>
       </div>
+
+      <h3>Shorts · Reels · TikTok</h3>
+      <div class="shortsGrid">
+        <button class="preset" data-res="1080x1920">1080×1920<small>1080p vertical</small></button>
+        <button class="preset" data-res="720x1280">720×1280<small>720p vertical</small></button>
+        <button class="preset" data-res="1080x1080">1080×1080<small>Square feed</small></button>
+        <button class="preset" data-res="1440x2560">1440×2560<small>2K vertical</small></button>
+      </div>
+      <div class="hint">Pick a vertical preset → your video auto-fills the tall frame. Use PIP ▸ BL for a face-cam corner.</div>
 
       <h3>Layout mode</h3>
       <div id="layoutChips">
@@ -1716,14 +1747,16 @@ node proxy-broll.js  # port 8789</pre>
 </aside>
 
 <main>
+  <button id="fsExit" title="Exit fullscreen (Esc)">✕ Exit fullscreen</button>
   <div class="stage">
     <canvas id="stage" width="1280" height="720"></canvas>
   </div>
-  <div class="transport">
-    <button id="playBtn">▶</button>
+    <div class="transport">
+    <button id="playBtn" title="Play / Pause (Space)">▶</button>
     <input type="range" id="seek" min="0" max="1000" value="0">
     <span id="time">0:00 / 0:00</span>
     <span id="recTime">00:00</span>
+    <button id="fsBtn" title="Fullscreen (F)">⛶</button>
     <button id="recBtn2" class="rec">● REC</button>
   </div>
 </main>
@@ -1744,8 +1777,11 @@ ctx.imageSmoothingQuality = 'high';
 /* ---------- hidden media elements ---------- */
 function mkEl(tag){
   const e = document.createElement(tag);
-  e.style.cssText = 'position:fixed;left:-9999px;top:0;width:2px;height:2px;opacity:0;pointer-events:none';
-  e.playsInline = true; e.crossOrigin = 'anonymous'; e.preload = 'auto';
+  // Offscreen but full-size, so Chrome doesn't suspend video decoding.
+  // Do NOT set crossOrigin here — it breaks blob: URLs (local files).
+  e.style.cssText = 'position:fixed;left:-100000px;top:0;width:4px;height:4px;opacity:0.001;pointer-events:none;';
+  e.playsInline = true;
+  e.preload = 'auto';
   document.body.appendChild(e);
   return e;
 }
@@ -6663,20 +6699,41 @@ document.querySelectorAll('nav.tabs button').forEach(b => {
 $('mainFile').onchange = e => {
   const f = e.target.files[0]; if (!f) return;
   mainVideo.srcObject = null;
+  // Local files = blob: URL → NO crossOrigin. This is the critical fix.
+  mainVideo.removeAttribute('crossorigin');
+
+  mainVideo.onloadedmetadata = () => {
+    if (mainVideo.videoWidth === 0){
+      console.error('[Studio X] No video track decoded — audio-only or unsupported codec (HEVC/AV1).');
+      $('mainPrev').innerHTML = '<span style="color:#ff90a6">⚠ audio-only or unsupported codec — try MP4 (H.264)</span>';
+    } else {
+      $('mainPrev').innerHTML =
+        '<span style="color:#7f8ba5">✓ video ' + mainVideo.videoWidth + '×' + mainVideo.videoHeight + '</span>';
+    }
+  };
+  mainVideo.onerror = () => {
+    $('mainPrev').innerHTML = '<span style="color:#ff90a6">⚠ video failed to load</span>';
+  };
+
   mainVideo.src = URL.createObjectURL(f);
   mainVideo.load();
-  mainVideo.play().catch(()=>{});
-  $('mainPrev').innerHTML = '<span style="color:#7f8ba5">main video loaded</span>';
+  mainVideo.play().catch(err => console.warn('play() rejected:', err));
 };
 $('mainLoad').onclick = () => {
   const u = $('mainUrl').value.trim(); if (!u) return;
   mainVideo.srcObject = null;
+  if (/^https?:/i.test(u)){
+    mainVideo.crossOrigin = 'anonymous';   // needed for canvas-safe remote draw
+  } else {
+    mainVideo.removeAttribute('crossorigin');
+  }
   mainVideo.src = u;
   mainVideo.load();
   mainVideo.play().catch(err => alert('Could not load: ' + err.message));
 };
 $('mainCam').onclick = async () => {
   try {
+    mainVideo.removeAttribute('crossorigin');
     const s = await navigator.mediaDevices.getUserMedia({ video:true, audio:true });
     mainVideo.srcObject = s;
     await mainVideo.play();
@@ -6687,7 +6744,8 @@ $('mainCam').onclick = async () => {
 $('secFile').onchange = e => {
   const f = e.target.files[0]; if (!f) return;
   const isVid = f.type.startsWith('video');
-  if (isVid){
+    if (isVid){
+    secondVideo.removeAttribute('crossorigin');
     secondVideo.src = URL.createObjectURL(f);
     secondVideo.load();
     secondVideo.play().catch(()=>{});
@@ -6724,7 +6782,8 @@ $('bgFile').onchange = e => {
   if (S.bg.type === 'image'){
     const img = new Image(); img.onload = ()=> S.bg.image = img; img.src = url;
     $('bgPrev').innerHTML = '<img src="'+url+'">';
-  } else {
+    } else {
+    bgVideo.removeAttribute('crossorigin');
     bgVideo.src = url; bgVideo.loop = true; bgVideo.play().catch(()=>{});
     $('bgPrev').innerHTML = '<span style="color:#7f8ba5">bg video loaded</span>';
   }
@@ -8026,6 +8085,71 @@ $('snapBtn').onclick = () => {
     a.click();
   }, 'image/png');
 };
+
+/* ============================================================
+   FULLSCREEN MODE
+   ============================================================ */
+function enterFullscreen(){
+  document.body.classList.add('fs-mode');
+  const el = document.documentElement;
+  if (el.requestFullscreen) el.requestFullscreen().catch(()=>{});
+  else if (el.webkitRequestFullscreen) el.webkitRequestFullscreen();
+  // Nudge video playback on (in case user was paused)
+  if (mainVideo.paused && mainVideo.readyState >= 2){
+    mainVideo.play().catch(()=>{});
+  }
+}
+function exitFullscreen(){
+  document.body.classList.remove('fs-mode');
+  if (document.fullscreenElement && document.exitFullscreen) document.exitFullscreen().catch(()=>{});
+  else if (document.webkitFullscreenElement && document.webkitExitFullscreen) document.webkitExitFullscreen();
+}
+function toggleFullscreen(){
+  if (document.body.classList.contains('fs-mode')) exitFullscreen();
+  else enterFullscreen();
+}
+if ($('fsBtn'))  $('fsBtn').onclick  = toggleFullscreen;
+if ($('fsExit')) $('fsExit').onclick = exitFullscreen;
+
+/* Sync class if user presses Esc / F11 to leave native fullscreen */
+document.addEventListener('fullscreenchange', () => {
+  if (!document.fullscreenElement) document.body.classList.remove('fs-mode');
+});
+
+/* Keyboard shortcuts */
+document.addEventListener('keydown', e => {
+  if (e.target.matches('input,textarea,select')) return;
+  if (e.key === 'f' || e.key === 'F'){ e.preventDefault(); toggleFullscreen(); }
+  if (e.key === 'Escape' && document.body.classList.contains('fs-mode')){
+    exitFullscreen();
+  }
+  // Left/Right arrows = seek ±5s
+  if (e.key === 'ArrowRight' && mainVideo.readyState >= 2){
+    mainVideo.currentTime = Math.min(mainVideo.duration || 1e9, mainVideo.currentTime + 5);
+  }
+  if (e.key === 'ArrowLeft' && mainVideo.readyState >= 2){
+    mainVideo.currentTime = Math.max(0, mainVideo.currentTime - 5);
+  }
+});
+
+/* Mobile orientation helper: when user picks a vertical preset, hint the phone */
+const _origPresetHandler = document.querySelectorAll('.preset[data-res]');
+document.querySelectorAll('.preset[data-res]').forEach(b => {
+  const _orig = b.onclick;
+  b.onclick = () => {
+    if (_orig) _orig();
+    const [w, h] = b.dataset.res.split('x').map(Number);
+    // Auto-fit main video to the new canvas
+    S.main.x = 0; S.main.y = 0; S.main.w = w; S.main.h = h;
+    syncLayoutInputs();
+    // For vertical, default to a lower-third friendly frame
+    if (h > w){
+      if (typeof applyLayout === 'function' && S.layout === 'full'){
+        // keep full for simplicity
+      }
+    }
+  };
+});
 
 /* ============================================================
    BOOT
